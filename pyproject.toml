@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "star-organizer"
+version = "1.0.0"
+description = "Automatically organize your GitHub stars into categorized lists using AI"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Shrey" }
+]
+keywords = ["github", "stars", "organizer", "ai", "categorization", "github-lists"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "structlog>=24.0.0",
+    "requests>=2.31.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Shrey/stars-usecase-organizer"
+Repository = "https://github.com/Shrey/stars-usecase-organizer"
+Issues = "https://github.com/Shrey/stars-usecase-organizer/issues"
+
+[project.scripts]
+star-organizer = "star_organizer.main:main"
+
+[tool.setuptools.packages.find]
+include = ["star_organizer*"]
