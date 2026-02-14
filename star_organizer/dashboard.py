@@ -123,10 +123,11 @@ def _age_histogram(repos: List[Dict[str, Any]]):
         ("5+ yr", 1826, 999999),
     ]
     counts = {label: 0 for label, _, _ in buckets}
+    unknown_count = 0
     for r in repos:
         dt = _parse_date(r.get("pushed_at", ""))
         if not dt:
-            counts["5+ yr"] += 1
+            unknown_count += 1
             continue
         age_days = (now - dt).days
         for label, lo, hi in buckets:
@@ -147,7 +148,8 @@ def _age_histogram(repos: List[Dict[str, Any]]):
     table.add_column("Repos", style="yellow", justify="right", width=5)
     table.add_column("Bar", ratio=1, no_wrap=True)
 
-    max_count = max(counts.values()) if counts else 1
+    all_values = list(counts.values()) + [unknown_count]
+    max_count = max(all_values) if all_values else 1
     colors = ["green", "green", "yellow", "yellow", "red", "red", "bold red"]
     for (label, _, _), color in zip(buckets, colors):
         c = counts[label]
@@ -155,6 +157,10 @@ def _age_histogram(repos: List[Dict[str, Any]]):
             continue
         bar = _bar(c, max_count)
         table.add_row(label, str(c), f"[{color}]{bar}[/{color}]")
+
+    if unknown_count > 0:
+        bar = _bar(unknown_count, max_count)
+        table.add_row("[dim]Unknown[/dim]", str(unknown_count), f"[dim]{bar}[/dim]")
 
     console.print()
     console.print(table)

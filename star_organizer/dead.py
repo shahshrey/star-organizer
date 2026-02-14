@@ -32,7 +32,9 @@ def _check_repo_alive(full_name: str) -> Tuple[str, int]:
         if resp.status_code == 403:
             remaining = resp.headers.get("X-RateLimit-Remaining", "")
             if remaining == "0":
-                return full_name, 200
+                reset_ts = resp.headers.get("X-RateLimit-Reset", "")
+                LOGGER.warning("rate_limit_hit", repo=full_name, reset=reset_ts)
+                return full_name, 429
         return full_name, resp.status_code
     except requests.Timeout:
         return full_name, -2
@@ -57,7 +59,7 @@ def find_dead_repos(repos: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
         for future in as_completed(futures):
             full_name, status = future.result()
             status_map[full_name] = status
-            if status in (404, 403, 451, -1):
+            if status in (404, 403, 451, -1, -2):
                 repo = name_to_repo.get(full_name)
                 if repo:
                     dead.append(repo)
@@ -74,6 +76,7 @@ def dead_status_label(code: int) -> str:
     labels = {
         404: "Deleted / Not Found",
         403: "Private / Forbidden",
+        429: "Rate Limited",
         451: "DMCA Takedown",
         -1: "Network Error",
         -2: "Timeout",

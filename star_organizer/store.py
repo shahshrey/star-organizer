@@ -78,6 +78,21 @@ def save_sync_state(path: str, synced_urls: Set[str]) -> None:
         LOGGER.error("sync_state_save_failed", file=path, error=str(e))
 
 
+def remove_repo_from_organized(organized_data: OrganizedStarLists, repo_url: str) -> bool:
+    url = canonicalize_repo_url(repo_url)
+    removed = False
+    for cat_data in organized_data.values():
+        repos = cat_data.get("repos", [])
+        original_len = len(repos)
+        cat_data["repos"] = [
+            r for r in repos
+            if not isinstance(r, dict) or canonicalize_repo_url(r.get("url", "")) != url
+        ]
+        if len(cat_data["repos"]) < original_len:
+            removed = True
+    return removed
+
+
 def recategorize_repo(organized: OrganizedStarLists, repo_url: str, target_category: str) -> bool:
     url = canonicalize_repo_url(repo_url)
     if not url:
@@ -105,7 +120,7 @@ def recategorize_repo(organized: OrganizedStarLists, repo_url: str, target_categ
         r for r in organized[source_category]["repos"]
         if not isinstance(r, dict) or canonicalize_repo_url(r.get("url", "")) != url
     ]
-    organized.setdefault(target_category, {}).setdefault("repos", []).append(repo_entry)
+    organized[target_category].setdefault("repos", []).append(repo_entry)
     return True
 
 

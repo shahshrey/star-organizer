@@ -199,16 +199,16 @@ def print_repo_detail(repo: Dict[str, Any], index: int, total: int):
     style = _age_style(pushed)
 
     details = Text()
-    details.append(f"  Repository:  ", style="dim")
+    details.append("  Repository:  ", style="dim")
     details.append(repo.get("full_name", ""), style="bold cyan")
     details.append("\n")
 
     desc = repo.get("description", "") or "No description"
-    details.append(f"  Description: ", style="dim")
+    details.append("  Description: ", style="dim")
     details.append(desc[:120], style="white")
     details.append("\n")
 
-    details.append(f"  Language:    ", style="dim")
+    details.append("  Language:    ", style="dim")
     details.append(repo.get("language", "") or "—", style="white")
     details.append("    ", style="dim")
     details.append("Stars: ", style="dim")
@@ -218,13 +218,13 @@ def print_repo_detail(repo: Dict[str, Any], index: int, total: int):
     details.append(str(repo.get("forks_count", 0)), style="white")
     details.append("\n")
 
-    details.append(f"  Last push:   ", style="dim")
+    details.append("  Last push:   ", style="dim")
     details.append(_humanize_age(pushed), style=style)
     if pushed:
         details.append(f"  ({pushed[:10]})", style="dim")
     details.append("\n")
 
-    details.append(f"  URL:         ", style="dim")
+    details.append("  URL:         ", style="dim")
     details.append(repo.get("html_url", ""), style="blue underline")
 
     if repo.get("archived"):
@@ -251,7 +251,7 @@ def print_repo_detail(repo: Dict[str, Any], index: int, total: int):
 
 def print_dead_table(dead_repos: List[Dict[str, Any]], status_map: Dict[str, int]):
     if not dead_repos:
-        console.print("  [green]No dead repos found — all stars are accessible![/green]")
+        console.print("[green]No dead repos found — all stars are accessible![/green]")
         return
 
     from star_organizer.dead import dead_status_label
@@ -289,7 +289,7 @@ def print_dead_table(dead_repos: List[Dict[str, Any]], status_map: Dict[str, int
 
 def print_archived_table(archived_repos: List[Dict[str, Any]]):
     if not archived_repos:
-        console.print("  [green]No archived repos found![/green]")
+        console.print("[green]No archived repos found![/green]")
         return
 
     table = Table(

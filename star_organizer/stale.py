@@ -15,18 +15,14 @@ from star_organizer.display import (
     print_stale_table,
     print_success,
 )
-from star_organizer.github_client import (
-    fetch_starred_repos,
-    remove_repo_from_organized,
-    unstar_repo,
-)
+from star_organizer.github_client import fetch_starred_repos, unstar_repo
 from star_organizer.models import (
     DEFAULT_STALE_THRESHOLD_DAYS,
     OUTPUT_FILE,
     STALE_EXPORT_FILE,
     STALE_PRESETS,
 )
-from star_organizer.store import load_organized_stars, save_organized_stars
+from star_organizer.store import load_organized_stars, remove_repo_from_organized, save_organized_stars
 
 LOGGER = structlog.get_logger()
 
@@ -246,7 +242,7 @@ def _bulk_unstar(
         save_organized_stars(output_file, organized)
 
     print_success(f"Unstarred {unstarred} repos" + (f" ({failed} failed)" if failed else ""))
-    return len(stale_repos) - unstarred, unstarred
+    return failed, unstarred
 
 
 def run_stale_check(
@@ -303,8 +299,8 @@ def run_stale_check(
         kept, unstarred = _review_one_by_one(stale, output_file)
         print_stale_actions_summary(kept, unstarred, kept + unstarred)
     elif action == "bulk_unstar":
-        kept, unstarred = _bulk_unstar(stale, output_file)
-        if unstarred:
-            print_stale_actions_summary(kept, unstarred, kept + unstarred)
+        failed, unstarred = _bulk_unstar(stale, output_file)
+        if unstarred or failed:
+            print_stale_actions_summary(0, unstarred, unstarred + failed)
     elif action == "export":
         _export_stale(stale)
