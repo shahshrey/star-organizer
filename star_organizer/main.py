@@ -88,7 +88,11 @@ def _run(
     console.print()
 
     if reset and backup:
-        path = create_backup(output_file)
+        try:
+            path = create_backup(output_file)
+        except Exception as e:
+            print_error(f"Backup failed: {e} — aborting reset.")
+            raise typer.Exit(1)
         if path:
             print_success(f"Backup created: [dim]{path}[/dim]")
 
@@ -99,8 +103,10 @@ def _run(
             raise typer.Exit(1)
         already_synced = set() if reset else load_sync_state(state_file)
         with console.status("[bold blue]Syncing to GitHub...[/bold blue]"):
-            total, success = phase_4_sync(organized, already_synced, reset, state_file)
+            total, success, skipped_cats = phase_4_sync(organized, already_synced, reset, state_file)
         print_phase(4, "GitHub Sync", {"synced": success, "total": total})
+        if skipped_cats:
+            print_error(f"{skipped_cats} categor{'y' if skipped_cats == 1 else 'ies'} skipped (missing list IDs)")
         print_summary(organized)
         return
 
@@ -146,9 +152,11 @@ def _run(
         return
 
     with console.status("[bold blue]Phase 4 — Syncing to GitHub...[/bold blue]"):
-        total, success = phase_4_sync(organized, already_synced, reset, state_file)
+        total, success, skipped_cats = phase_4_sync(organized, already_synced, reset, state_file)
 
     print_phase(4, "GitHub Sync", {"synced": success, "total": total})
+    if skipped_cats:
+        print_error(f"{skipped_cats} categor{'y' if skipped_cats == 1 else 'ies'} skipped (missing list IDs)")
     print_summary(organized)
 
 
@@ -191,24 +199,39 @@ def _interactive(output_file: str, state_file: str):
                 default=True,
                 style=MENU_STYLE,
             ).ask()
+            if backup is None:
+                console.print("[dim]Cancelled.[/dim]")
+                console.print()
+                continue
 
-        limit_str = questionary.text(
-            "Limit repos? (number, or 0 for all)",
-            default="0",
-            validate=lambda x: True if x.isdigit() else "Enter a number",
-            style=MENU_STYLE,
-        ).ask()
-        test_limit = int(limit_str) if limit_str and limit_str.isdigit() else 0
+        test_limit = 0
+        if not sync_only:
+            limit_str = questionary.text(
+                "Limit repos? (number, or 0 for all)",
+                default="0",
+                validate=lambda x: True if x.isdigit() else "Enter a number",
+                style=MENU_STYLE,
+            ).ask()
+            if limit_str is None:
+                console.print("[dim]Cancelled.[/dim]")
+                console.print()
+                continue
+            test_limit = int(limit_str) if limit_str.isdigit() else 0
 
-        _run(
-            reset=reset,
-            backup=backup,
-            organize_only=organize_only,
-            sync_only=sync_only,
-            test_limit=test_limit,
-            output_file=output_file,
-            state_file=state_file,
-        )
+        try:
+            _run(
+                reset=reset,
+                backup=backup,
+                organize_only=organize_only,
+                sync_only=sync_only,
+                test_limit=test_limit,
+                output_file=output_file,
+                state_file=state_file,
+            )
+        except SystemExit:
+            pass
+        except Exception as e:
+            print_error(f"Unexpected error: {e}")
         console.print()
 
 

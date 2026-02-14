@@ -51,14 +51,10 @@ def create_backup(output_file: str) -> str:
     if not os.path.exists(output_file):
         return ""
     backup_path = f"{output_file}.backup.{int(time.time())}"
-    try:
-        with open(output_file, "r", encoding="utf-8") as src:
-            with open(backup_path, "w", encoding="utf-8") as dst:
-                dst.write(src.read())
-        return backup_path
-    except Exception as e:
-        LOGGER.error("backup_failed", error=str(e))
-        return ""
+    with open(output_file, "r", encoding="utf-8") as src:
+        with open(backup_path, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
+    return backup_path
 
 
 def phase_1_fetch_and_load(
@@ -123,36 +119,36 @@ def phase_3_categorize(
 ) -> OrganizedStarLists:
     LOGGER.info("phase_3_categorization")
 
-    need_categories = not organized or len(organized) < MAX_GITHUB_LISTS or reset
+    need_categories = not organized or len(organized) > MAX_GITHUB_LISTS or reset
+    repos_to_categorize = list(new_metadata)
+
     if need_categories:
         LOGGER.info("creating_new_categories", using_repos=len(all_metadata))
         categories = create_categories(all_metadata)
 
-        old_repos_by_url: Dict[str, dict] = {}
+        old_repo_urls: set = set()
         if not reset:
-            for data in organized.values():
-                for repo in data.get("repos", []):
-                    if isinstance(repo, dict) and repo.get("url"):
-                        old_repos_by_url[repo["url"]] = repo
+            old_repo_urls = extract_all_repo_urls(organized)
 
         organized = {
             name: {"description": desc, "repos": []}
             for name, desc in categories.items()
         }
-
-        if old_repos_by_url:
-            first_cat = next(iter(organized.keys()))
-            for repo in old_repos_by_url.values():
-                organized[first_cat]["repos"].append(repo)
-
         save_organized_stars(output_file, organized)
         LOGGER.info("categories_saved", count=len(organized))
 
-    if not new_metadata:
-        LOGGER.info("no_new_repos_to_categorize")
+        if old_repo_urls:
+            metadata_by_url = {m["url"]: m for m in all_metadata}
+            new_urls = {m["url"] for m in new_metadata}
+            old_metadata = [metadata_by_url[url] for url in old_repo_urls if url in metadata_by_url and url not in new_urls]
+            repos_to_categorize = old_metadata + repos_to_categorize
+            LOGGER.info("repos_queued_for_recategorization", old=len(old_metadata), new=len(new_metadata))
+
+    if not repos_to_categorize:
+        LOGGER.info("no_repos_to_categorize")
         return organized
 
-    count = categorize_repos(new_metadata, organized, save_organized_stars, output_file)
+    count = categorize_repos(repos_to_categorize, organized, save_organized_stars, output_file)
     LOGGER.info("phase_3_complete", categorized=count)
     return organized
 
@@ -162,7 +158,7 @@ def phase_4_sync(
     already_synced: Set[str],
     reset: bool,
     state_file: str,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     LOGGER.info("phase_4_github_sync", reset=reset)
 
     list_limiter = RateLimiter(RATE_LIMIT_LIST)
@@ -185,7 +181,7 @@ def phase_4_sync(
 
     if not tasks:
         LOGGER.info("nothing_to_sync")
-        return 0, 0
+        return 0, 0, 0
 
     repo_pairs = list({(t[1].split("/")[0], t[1].split("/")[1]) for t in tasks})
     LOGGER.info("sync_plan", repos_to_sync=len(tasks), unique_repos=len(repo_pairs))
@@ -213,10 +209,12 @@ def phase_4_sync(
     ops: List[Tuple[str, str, str, str]] = []
     full_name_to_url: Dict[str, str] = {}
     skipped = 0
+    missing_lists: set = set()
 
     for cat_name, repo_full, repo_url in tasks:
         list_id = list_ids.get(cat_name, "")
         if not list_id:
+            missing_lists.add(cat_name)
             continue
         owner, name = repo_full.split("/", 1)
         rid = repo_ids.get((owner, name), "")
@@ -225,6 +223,9 @@ def phase_4_sync(
             continue
         ops.append((cat_name, rid, repo_full, list_id))
         full_name_to_url[repo_full] = repo_url
+
+    if missing_lists:
+        LOGGER.warning("categories_skipped_no_list_id", categories=sorted(missing_lists), count=len(missing_lists))
 
     if skipped:
         LOGGER.info("repos_skipped_no_id", count=skipped)
@@ -257,4 +258,4 @@ def phase_4_sync(
     save_sync_state(state_file, updated)
     LOGGER.info("sync_state_saved", total_synced=len(updated), newly_added=len(newly_synced))
 
-    return total, success
+    return total, success, len(missing_lists)
