@@ -11,6 +11,7 @@ from star_organizer.models import (
     README_LINES_TO_FETCH,
     RepoMetadata,
 )
+from star_organizer.store import canonicalize_repo_url
 
 LOGGER = structlog.get_logger()
 
@@ -97,6 +98,36 @@ def _build_metadata(repo: Dict[str, Any], readme: str) -> RepoMetadata:
         "topics": repo.get("topics", []),
         "readme": readme,
     }
+
+
+def unstar_repo(owner: str, name: str) -> bool:
+    if not GITHUB_TOKEN:
+        return False
+    try:
+        resp = requests.delete(
+            f"https://api.github.com/user/starred/{owner}/{name}",
+            headers=_auth_headers("application/vnd.github+json"),
+            timeout=GITHUB_API_TIMEOUT_SECONDS,
+        )
+        return resp.status_code == 204
+    except Exception as e:
+        LOGGER.error("unstar_failed", repo=f"{owner}/{name}", error=str(e))
+        return False
+
+
+def remove_repo_from_organized(organized_data: Dict, repo_url: str) -> bool:
+    url = canonicalize_repo_url(repo_url)
+    removed = False
+    for cat_data in organized_data.values():
+        repos = cat_data.get("repos", [])
+        original_len = len(repos)
+        cat_data["repos"] = [
+            r for r in repos
+            if not isinstance(r, dict) or canonicalize_repo_url(r.get("url", "")) != url
+        ]
+        if len(cat_data["repos"]) < original_len:
+            removed = True
+    return removed
 
 
 def extract_repos_metadata(repos: List[Dict[str, Any]]) -> List[RepoMetadata]:

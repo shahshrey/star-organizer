@@ -6,16 +6,24 @@ import questionary
 import structlog
 import typer
 
+from star_organizer.awesome import run_awesome_export
+from star_organizer.dashboard import print_dashboard
+from star_organizer.dead import find_dead_repos
 from star_organizer.display import (
     console,
+    print_archived_table,
     print_banner,
     print_categories_table,
+    print_cleanup_report,
+    print_dead_table,
     print_error,
     print_phase,
+    print_stale_table,
     print_success,
     print_summary,
 )
-from star_organizer.models import OUTPUT_FILE, SYNC_STATE_FILE
+from star_organizer.github_client import fetch_starred_repos, unstar_repo
+from star_organizer.models import GITHUB_TOKEN, OUTPUT_FILE, SYNC_STATE_FILE
 from star_organizer.pipeline import (
     create_backup,
     phase_1_fetch_and_load,
@@ -24,7 +32,14 @@ from star_organizer.pipeline import (
     phase_4_sync,
     validate_tokens,
 )
-from star_organizer.store import load_organized_stars, load_sync_state
+from star_organizer.stale import find_stale_repos, parse_threshold, run_stale_check
+from star_organizer.store import (
+    find_repo_in_organized,
+    load_organized_stars,
+    load_sync_state,
+    recategorize_repo,
+    save_organized_stars,
+)
 
 
 def _quiet_logs():
@@ -56,8 +71,18 @@ ACTIONS = [
     questionary.Choice("Organize my stars (full pipeline)", value="full"),
     questionary.Choice("Organize only (skip GitHub sync)", value="organize"),
     questionary.Choice("Sync only (push existing categories to GitHub)", value="sync"),
-    questionary.Choice("Reset & re-organize everything", value="reset"),
+    questionary.Separator("─── Analysis ───"),
+    questionary.Choice("Find stale stars", value="stale"),
+    questionary.Choice("Find dead stars (404/private)", value="dead"),
+    questionary.Choice("Find archived stars", value="archived"),
+    questionary.Choice("Cleanup report (stale + dead + archived)", value="cleanup"),
+    questionary.Choice("Star dashboard", value="dashboard"),
+    questionary.Separator("─── Tools ───"),
+    questionary.Choice("Re-categorize a repo", value="recategorize"),
+    questionary.Choice("Export as awesome-list", value="awesome"),
     questionary.Choice("Preview current categories", value="preview"),
+    questionary.Separator("───"),
+    questionary.Choice("Reset & re-organize everything", value="reset"),
     questionary.Choice("Exit", value="exit"),
 ]
 
@@ -158,6 +183,182 @@ def _run(
     print_summary(organized)
 
 
+def _run_dead_check(test_limit: int = 0, interactive: bool = True):
+    with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
+        repos = fetch_starred_repos(test_limit)
+    if not repos:
+        print_error("No repos fetched.")
+        return
+    with console.status(f"[bold blue]Checking {len(repos)} repos for accessibility...[/bold blue]"):
+        dead, status_map = find_dead_repos(repos)
+    console.print(f"\n  [bold]Checked {len(repos)} repos[/bold] — [red]{len(dead)} dead[/red]")
+    print_dead_table(dead, status_map)
+    if dead and interactive:
+        action = questionary.select(
+            "What would you like to do?",
+            choices=[
+                questionary.Choice("Unstar all dead repos", value="unstar"),
+                questionary.Choice("Back", value="back"),
+            ],
+            style=MENU_STYLE,
+        ).ask()
+        if action == "unstar":
+            confirm = questionary.confirm(
+                f"Unstar {len(dead)} dead repos?", default=False, style=MENU_STYLE
+            ).ask()
+            if confirm:
+                count = 0
+                for repo in dead:
+                    fn = repo.get("full_name", "")
+                    if "/" in fn:
+                        owner, name = fn.split("/", 1)
+                        if unstar_repo(owner, name):
+                            count += 1
+                print_success(f"Unstarred {count}/{len(dead)} dead repos")
+
+
+def _run_archived_check(test_limit: int = 0, interactive: bool = True):
+    with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
+        repos = fetch_starred_repos(test_limit)
+    if not repos:
+        print_error("No repos fetched.")
+        return
+    archived = [r for r in repos if r.get("archived")]
+    console.print(f"\n  [bold]Found {len(archived)} archived repos[/bold] out of {len(repos)} total")
+    print_archived_table(archived)
+    if archived and interactive:
+        action = questionary.select(
+            "What would you like to do?",
+            choices=[
+                questionary.Choice("Unstar all archived repos", value="unstar"),
+                questionary.Choice("Back", value="back"),
+            ],
+            style=MENU_STYLE,
+        ).ask()
+        if action == "unstar":
+            confirm = questionary.confirm(
+                f"Unstar {len(archived)} archived repos?", default=False, style=MENU_STYLE
+            ).ask()
+            if confirm:
+                count = 0
+                for repo in archived:
+                    fn = repo.get("full_name", "")
+                    if "/" in fn:
+                        owner, name = fn.split("/", 1)
+                        if unstar_repo(owner, name):
+                            count += 1
+                print_success(f"Unstarred {count}/{len(archived)} archived repos")
+
+
+def _run_cleanup(test_limit: int = 0, threshold_days: int = 0):
+    if threshold_days <= 0:
+        threshold_days = parse_threshold(
+            questionary.select(
+                "Staleness threshold:",
+                choices=[questionary.Choice(k, value=k) for k in ["3 months", "6 months", "1 year", "2 years"]],
+                default="1 year",
+                style=MENU_STYLE,
+            ).ask() or "1 year"
+        )
+
+    with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
+        repos = fetch_starred_repos(test_limit)
+    if not repos:
+        print_error("No repos fetched.")
+        return
+
+    stale = find_stale_repos(repos, threshold_days)
+
+    with console.status(f"[bold blue]Checking {len(repos)} repos for accessibility...[/bold blue]"):
+        dead, status_map = find_dead_repos(repos)
+
+    archived = [r for r in repos if r.get("archived")]
+
+    stale_names = {r.get("full_name", "") for r in stale}
+    dead_names = {r.get("full_name", "") for r in dead}
+    archived_names = {r.get("full_name", "") for r in archived}
+    print_cleanup_report(len(repos), stale_names, dead_names, archived_names, threshold_days)
+
+    if stale:
+        print_stale_table(stale)
+    if dead:
+        print_dead_table(dead, status_map)
+    if archived:
+        print_archived_table(archived)
+
+    if not stale and not dead and not archived:
+        console.print("\n  [green bold]Your stars are squeaky clean![/green bold]\n")
+
+
+def _run_dashboard(test_limit: int = 0):
+    with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
+        repos = fetch_starred_repos(test_limit)
+    if not repos:
+        print_error("No repos fetched.")
+        return
+    print_dashboard(repos)
+
+
+def _run_recategorize(output_file: str):
+    organized = load_organized_stars(output_file)
+    if not organized:
+        print_error(f"No organized data at [bold]{output_file}[/bold]. Run the pipeline first.")
+        return
+
+    query = questionary.text(
+        "Search for a repo (name or URL fragment):",
+        style=MENU_STYLE,
+    ).ask()
+    if not query:
+        return
+
+    results = find_repo_in_organized(organized, query)
+    if not results:
+        print_error(f"No repos matching '{query}' found.")
+        return
+
+    choices = [
+        questionary.Choice(
+            f"{repo.get('url', '').split('github.com/')[-1]}  [{cat}]",
+            value=(cat, repo),
+        )
+        for cat, repo in results
+    ]
+    choices.append(questionary.Choice("Cancel", value=None))
+
+    selected = questionary.select(
+        "Which repo?",
+        choices=choices,
+        style=MENU_STYLE,
+    ).ask()
+    if not selected:
+        return
+
+    source_cat, repo = selected
+    console.print(f"  [dim]Currently in:[/dim] [bold]{source_cat}[/bold]")
+
+    cat_choices = [
+        questionary.Choice(name, value=name)
+        for name in sorted(organized.keys())
+        if name != source_cat
+    ]
+    cat_choices.append(questionary.Choice("Cancel", value=None))
+
+    target = questionary.select(
+        "Move to which category?",
+        choices=cat_choices,
+        style=MENU_STYLE,
+    ).ask()
+    if not target:
+        return
+
+    if recategorize_repo(organized, repo.get("url", ""), target):
+        save_organized_stars(output_file, organized)
+        print_success(f"Moved to [bold]{target}[/bold]")
+    else:
+        print_error("Failed to move repo.")
+
+
 def _interactive(output_file: str, state_file: str):
     print_banner()
 
@@ -174,6 +375,82 @@ def _interactive(output_file: str, state_file: str):
 
         if action == "preview":
             _preview(output_file)
+            console.print()
+            continue
+
+        if action == "stale":
+            if not GITHUB_TOKEN:
+                print_error("GITHUB_TOKEN is not set")
+                console.print()
+                continue
+            try:
+                run_stale_check(output_file=output_file)
+            except Exception as e:
+                print_error(f"Stale check failed: {e}")
+            console.print()
+            continue
+
+        if action == "dead":
+            if not GITHUB_TOKEN:
+                print_error("GITHUB_TOKEN is not set")
+                console.print()
+                continue
+            try:
+                _run_dead_check()
+            except Exception as e:
+                print_error(f"Dead check failed: {e}")
+            console.print()
+            continue
+
+        if action == "archived":
+            if not GITHUB_TOKEN:
+                print_error("GITHUB_TOKEN is not set")
+                console.print()
+                continue
+            try:
+                _run_archived_check()
+            except Exception as e:
+                print_error(f"Archived check failed: {e}")
+            console.print()
+            continue
+
+        if action == "cleanup":
+            if not GITHUB_TOKEN:
+                print_error("GITHUB_TOKEN is not set")
+                console.print()
+                continue
+            try:
+                _run_cleanup()
+            except Exception as e:
+                print_error(f"Cleanup failed: {e}")
+            console.print()
+            continue
+
+        if action == "dashboard":
+            if not GITHUB_TOKEN:
+                print_error("GITHUB_TOKEN is not set")
+                console.print()
+                continue
+            try:
+                _run_dashboard()
+            except Exception as e:
+                print_error(f"Dashboard failed: {e}")
+            console.print()
+            continue
+
+        if action == "recategorize":
+            try:
+                _run_recategorize(output_file)
+            except Exception as e:
+                print_error(f"Re-categorize failed: {e}")
+            console.print()
+            continue
+
+        if action == "awesome":
+            try:
+                run_awesome_export(output_file)
+            except Exception as e:
+                print_error(f"Awesome export failed: {e}")
             console.print()
             continue
 
@@ -240,6 +517,13 @@ def cli(
     backup: bool = typer.Option(False, "--backup", help="Backup organized_stars.json before reset"),
     organize_only: bool = typer.Option(False, "--organize-only", help="Only organize, skip GitHub sync"),
     sync_only: bool = typer.Option(False, "--sync-only", help="Only sync existing organized_stars.json"),
+    find_stale: bool = typer.Option(False, "--find-stale", help="Find stale/unmaintained starred repos"),
+    find_dead: bool = typer.Option(False, "--find-dead", help="Find dead/deleted/private starred repos"),
+    find_archived: bool = typer.Option(False, "--find-archived", help="Find archived starred repos"),
+    cleanup: bool = typer.Option(False, "--cleanup", help="Run stale + dead + archived report"),
+    dashboard: bool = typer.Option(False, "--dashboard", help="Show star dashboard with charts"),
+    awesome: bool = typer.Option(False, "--awesome", help="Export organized stars as awesome-list markdown"),
+    stale_threshold: str = typer.Option("1y", "--stale-threshold", help="Staleness threshold (e.g. 90, 6m, 1y, 2y)"),
     test_limit: int = typer.Option(0, "--test-limit", help="Limit starred repos fetched (for testing)"),
     output_file: str = typer.Option(OUTPUT_FILE, "--output-file", help="Path to organized_stars.json"),
     state_file: str = typer.Option(SYNC_STATE_FILE, "--state-file", help="Path to sync state file"),
@@ -252,6 +536,55 @@ def cli(
     no_args = len(sys.argv) <= 1
     if interactive is True or (interactive is None and no_args):
         _interactive(output_file, state_file)
+        return
+
+    if not verbose:
+        _quiet_logs()
+
+    if find_stale:
+        if not GITHUB_TOKEN:
+            print_error("GITHUB_TOKEN is not set")
+            raise typer.Exit(1)
+        threshold_days = parse_threshold(stale_threshold)
+        run_stale_check(
+            test_limit=test_limit,
+            threshold_days=threshold_days,
+            output_file=output_file,
+            interactive=interactive is not False,
+        )
+        return
+
+    if find_dead:
+        if not GITHUB_TOKEN:
+            print_error("GITHUB_TOKEN is not set")
+            raise typer.Exit(1)
+        _run_dead_check(test_limit, interactive=interactive is not False)
+        return
+
+    if find_archived:
+        if not GITHUB_TOKEN:
+            print_error("GITHUB_TOKEN is not set")
+            raise typer.Exit(1)
+        _run_archived_check(test_limit, interactive=interactive is not False)
+        return
+
+    if cleanup:
+        if not GITHUB_TOKEN:
+            print_error("GITHUB_TOKEN is not set")
+            raise typer.Exit(1)
+        threshold_days = parse_threshold(stale_threshold)
+        _run_cleanup(test_limit, threshold_days)
+        return
+
+    if dashboard:
+        if not GITHUB_TOKEN:
+            print_error("GITHUB_TOKEN is not set")
+            raise typer.Exit(1)
+        _run_dashboard(test_limit)
+        return
+
+    if awesome:
+        run_awesome_export(output_file)
         return
 
     _run(
