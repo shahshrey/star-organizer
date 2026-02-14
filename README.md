@@ -124,7 +124,7 @@ gh auth status    # Verify
 star-organizer    # Interactive mode — menu guides you through everything
 ```
 
-```
+```text
 ╭──────────────────────────────────────────────────────────╮
 │                    ⭐ Star Organizer                     │
 ╰─────────── Organize your GitHub stars with AI ───────────╯
@@ -138,7 +138,7 @@ star-organizer    # Interactive mode — menu guides you through everything
   Exit
 ```
 
-Use arrow keys to navigate, Enter to select. The session stays alive after each action — select **Exit** or press `Ctrl+C` when done.
+Use arrow keys to navigate, Enter to select. The session stays alive after each action — select **Exit** for a clean shutdown.
 
 <br/>
 
@@ -156,6 +156,7 @@ star-organizer -i     # Force interactive mode
 ### Flag Mode
 
 All flags work for scripting and CI. Passing any flag skips the interactive menu:
+Use `-i` / `--interactive` to force the interactive menu even when other flags are present, and use `--no-interactive` to force non-interactive execution.
 
 ```bash
 star-organizer --reset                        # Full reset + categorize + sync

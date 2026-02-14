@@ -31,6 +31,9 @@ def _quiet_logs():
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING),
     )
+    logging.getLogger().setLevel(logging.WARNING)
+    for handler in logging.getLogger().handlers:
+        handler.setLevel(logging.WARNING)
 
 app = typer.Typer(
     name="star-organizer",
@@ -92,7 +95,7 @@ def _run(
             path = create_backup(output_file)
         except Exception as e:
             print_error(f"Backup failed: {e} — aborting reset.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         if path:
             print_success(f"Backup created: [dim]{path}[/dim]")
 
@@ -133,14 +136,9 @@ def _run(
         "new": len(new_metadata),
     })
 
-    if new_metadata:
-        with console.status(
-            f"[bold blue]Phase 3 — Categorizing {len(new_metadata)} repos with AI...[/bold blue]"
-        ):
-            organized = phase_3_categorize(
-                all_metadata, new_metadata, organized, reset, output_file
-            )
-    else:
+    with console.status(
+        f"[bold blue]Phase 3 — Categorizing {len(new_metadata)} repos with AI...[/bold blue]"
+    ):
         organized = phase_3_categorize(
             all_metadata, new_metadata, organized, reset, output_file
         )
@@ -228,8 +226,9 @@ def _interactive(output_file: str, state_file: str):
                 output_file=output_file,
                 state_file=state_file,
             )
-        except SystemExit:
-            pass
+        except SystemExit as se:
+            if se.code not in (None, 0):
+                raise
         except Exception as e:
             print_error(f"Unexpected error: {e}")
         console.print()
@@ -274,4 +273,4 @@ def main():
         console.print("\n[dim]Interrupted.[/dim]")
     except Exception as e:
         print_error(f"Unexpected error: {e}")
-        raise
+        sys.exit(1)

@@ -119,7 +119,7 @@ def phase_3_categorize(
 ) -> OrganizedStarLists:
     LOGGER.info("phase_3_categorization")
 
-    need_categories = not organized or len(organized) > MAX_GITHUB_LISTS or reset
+    need_categories = not organized or len(organized) < MAX_GITHUB_LISTS or reset
     repos_to_categorize = list(new_metadata)
 
     if need_categories:
