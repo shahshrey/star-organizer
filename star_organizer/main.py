@@ -37,6 +37,7 @@ from star_organizer.store import (
     find_repo_in_organized,
     load_organized_stars,
     load_sync_state,
+    remove_repo_from_organized,
     recategorize_repo,
     save_organized_stars,
 )
@@ -183,7 +184,7 @@ def _run(
     print_summary(organized)
 
 
-def _run_dead_check(test_limit: int = 0, interactive: bool = True):
+def _run_dead_check(test_limit: int = 0, interactive: bool = True, output_file: str = OUTPUT_FILE):
     with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
         repos = fetch_starred_repos(test_limit)
     if not repos:
@@ -207,6 +208,7 @@ def _run_dead_check(test_limit: int = 0, interactive: bool = True):
                 f"Unstar {len(dead)} dead repos?", default=False, style=MENU_STYLE
             ).ask()
             if confirm:
+                organized = load_organized_stars(output_file)
                 count = 0
                 for repo in dead:
                     fn = repo.get("full_name", "")
@@ -214,10 +216,13 @@ def _run_dead_check(test_limit: int = 0, interactive: bool = True):
                         owner, name = fn.split("/", 1)
                         if unstar_repo(owner, name):
                             count += 1
+                            remove_repo_from_organized(organized, repo.get("html_url", ""))
+                if count > 0:
+                    save_organized_stars(output_file, organized)
                 print_success(f"Unstarred {count}/{len(dead)} dead repos")
 
 
-def _run_archived_check(test_limit: int = 0, interactive: bool = True):
+def _run_archived_check(test_limit: int = 0, interactive: bool = True, output_file: str = OUTPUT_FILE):
     with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
         repos = fetch_starred_repos(test_limit)
     if not repos:
@@ -240,6 +245,7 @@ def _run_archived_check(test_limit: int = 0, interactive: bool = True):
                 f"Unstar {len(archived)} archived repos?", default=False, style=MENU_STYLE
             ).ask()
             if confirm:
+                organized = load_organized_stars(output_file)
                 count = 0
                 for repo in archived:
                     fn = repo.get("full_name", "")
@@ -247,19 +253,24 @@ def _run_archived_check(test_limit: int = 0, interactive: bool = True):
                         owner, name = fn.split("/", 1)
                         if unstar_repo(owner, name):
                             count += 1
+                            remove_repo_from_organized(organized, repo.get("html_url", ""))
+                if count > 0:
+                    save_organized_stars(output_file, organized)
                 print_success(f"Unstarred {count}/{len(archived)} archived repos")
 
 
 def _run_cleanup(test_limit: int = 0, threshold_days: int = 0):
     if threshold_days <= 0:
-        threshold_days = parse_threshold(
-            questionary.select(
-                "Staleness threshold:",
-                choices=[questionary.Choice(k, value=k) for k in ["3 months", "6 months", "1 year", "2 years"]],
-                default="1 year",
-                style=MENU_STYLE,
-            ).ask() or "1 year"
-        )
+        selected_threshold = questionary.select(
+            "Staleness threshold:",
+            choices=[questionary.Choice(k, value=k) for k in ["3 months", "6 months", "1 year", "2 years"]],
+            default="1 year",
+            style=MENU_STYLE,
+        ).ask()
+        if selected_threshold is None:
+            console.print("[dim]Cancelled.[/dim]")
+            return
+        threshold_days = parse_threshold(selected_threshold)
 
     with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
         repos = fetch_starred_repos(test_limit)
@@ -396,7 +407,7 @@ def _interactive(output_file: str, state_file: str):
                 console.print()
                 continue
             try:
-                _run_dead_check()
+                _run_dead_check(output_file=output_file)
             except Exception as e:
                 print_error(f"Dead check failed: {e}")
             console.print()
@@ -408,7 +419,7 @@ def _interactive(output_file: str, state_file: str):
                 console.print()
                 continue
             try:
-                _run_archived_check()
+                _run_archived_check(output_file=output_file)
             except Exception as e:
                 print_error(f"Archived check failed: {e}")
             console.print()
@@ -558,14 +569,14 @@ def cli(
         if not GITHUB_TOKEN:
             print_error("GITHUB_TOKEN is not set")
             raise typer.Exit(1)
-        _run_dead_check(test_limit, interactive=interactive is not False)
+        _run_dead_check(test_limit, interactive=interactive is not False, output_file=output_file)
         return
 
     if find_archived:
         if not GITHUB_TOKEN:
             print_error("GITHUB_TOKEN is not set")
             raise typer.Exit(1)
-        _run_archived_check(test_limit, interactive=interactive is not False)
+        _run_archived_check(test_limit, interactive=interactive is not False, output_file=output_file)
         return
 
     if cleanup:
