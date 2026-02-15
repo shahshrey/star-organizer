@@ -299,6 +299,6 @@ def run_stale_check(
     elif action == "bulk_unstar":
         failed, unstarred = _bulk_unstar(stale, output_file)
         if unstarred or failed:
-            print_stale_actions_summary(0, unstarred, unstarred + failed)
+            print_stale_actions_summary(failed, unstarred, unstarred + failed)
     elif action == "export":
         _export_stale(stale)

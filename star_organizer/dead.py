@@ -61,9 +61,12 @@ def find_dead_repos(repos: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
             for name in name_to_repo
         }
         completed = 0
+        rate_limited_count = 0
         for future in as_completed(futures):
             full_name, status = future.result()
             status_map[full_name] = status
+            if status == 429:
+                rate_limited_count += 1
             if status in DEAD_STATUS_CODES:
                 repo = name_to_repo.get(full_name)
                 if repo:
@@ -72,6 +75,13 @@ def find_dead_repos(repos: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
             completed += 1
             if completed % 20 == 0:
                 LOGGER.info("dead_check_progress", completed=completed, total=len(name_to_repo))
+
+    if rate_limited_count > 0:
+        LOGGER.warning(
+            "dead_check_rate_limited",
+            rate_limited=rate_limited_count,
+            total=len(name_to_repo),
+        )
 
     dead.sort(key=lambda r: r.get("full_name", ""))
     return dead, status_map
