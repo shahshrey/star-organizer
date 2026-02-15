@@ -78,12 +78,86 @@ def save_sync_state(path: str, synced_urls: Set[str]) -> None:
         LOGGER.error("sync_state_save_failed", file=path, error=str(e))
 
 
+def remove_repo_from_organized(organized_data: OrganizedStarLists, repo_url: str) -> bool:
+    url = canonicalize_repo_url(repo_url)
+    removed = False
+    for cat_data in organized_data.values():
+        repos = cat_data.get("repos", [])
+        original_len = len(repos)
+        cat_data["repos"] = [
+            r for r in repos
+            if not isinstance(r, dict) or canonicalize_repo_url(r.get("url", "")) != url
+        ]
+        if len(cat_data["repos"]) < original_len:
+            removed = True
+    return removed
+
+
+def recategorize_repo(organized: OrganizedStarLists, repo_url: str, target_category: str) -> bool:
+    url = canonicalize_repo_url(repo_url)
+    if not url:
+        return False
+    if target_category not in organized:
+        return False
+
+    repo_entry = None
+    source_category = None
+    for cat_name, cat_data in organized.items():
+        for repo in cat_data.get("repos", []):
+            if isinstance(repo, dict) and canonicalize_repo_url(repo.get("url", "")) == url:
+                repo_entry = repo
+                source_category = cat_name
+                break
+        if repo_entry:
+            break
+
+    if not repo_entry or not source_category:
+        return False
+    if source_category == target_category:
+        return False
+
+    organized[source_category]["repos"] = [
+        r for r in organized[source_category]["repos"]
+        if not isinstance(r, dict) or canonicalize_repo_url(r.get("url", "")) != url
+    ]
+    organized[target_category].setdefault("repos", []).append(repo_entry)
+    return True
+
+
+def find_repo_in_organized(organized: OrganizedStarLists, query: str) -> list:
+    query_lower = query.strip().lower()
+    if not query_lower:
+        return []
+    results = []
+    for cat_name, cat_data in organized.items():
+        for repo in cat_data.get("repos", []):
+            if not isinstance(repo, dict):
+                continue
+            raw_url = repo.get("url", "")
+            if not isinstance(raw_url, str):
+                raw_url = ""
+            url = canonicalize_repo_url(raw_url).lower()
+            raw_desc = repo.get("description", "")
+            desc = raw_desc.lower() if isinstance(raw_desc, str) else ""
+            name = url.split("/")[-1] if "/" in url else ""
+            if query_lower in url or query_lower in desc or query_lower in name:
+                results.append((cat_name, repo))
+    return results
+
+
 def extract_all_repo_urls(organized: OrganizedStarLists) -> Set[str]:
     urls: Set[str] = set()
     for list_data in organized.values():
         for repo in list_data.get("repos", []):
             if isinstance(repo, dict):
-                urls.add(repo.get("url", ""))
+                raw_url = repo.get("url", "")
+                if not isinstance(raw_url, str):
+                    continue
+            elif isinstance(repo, str):
+                raw_url = repo
             else:
-                urls.add(repo)
+                continue
+            url = canonicalize_repo_url(raw_url)
+            if url:
+                urls.add(url)
     return urls

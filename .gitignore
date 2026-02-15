@@ -30,5 +30,5 @@ Thumbs.db
 organized_stars.json
 .sync_to_github_state.json
 *.backup.*
-.sync_to_github_state.json
-organized_stars.json
+stale_stars.json
+awesome-stars.md

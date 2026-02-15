@@ -11,7 +11,6 @@ from star_organizer.models import (
     README_LINES_TO_FETCH,
     RepoMetadata,
 )
-
 LOGGER = structlog.get_logger()
 
 
@@ -97,6 +96,24 @@ def _build_metadata(repo: Dict[str, Any], readme: str) -> RepoMetadata:
         "topics": repo.get("topics", []),
         "readme": readme,
     }
+
+
+def unstar_repo(owner: str, name: str) -> bool:
+    if not GITHUB_TOKEN:
+        return False
+    try:
+        resp = requests.delete(
+            f"https://api.github.com/user/starred/{owner}/{name}",
+            headers=_auth_headers("application/vnd.github+json"),
+            timeout=GITHUB_API_TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 204:
+            LOGGER.error("unstar_failed", repo=f"{owner}/{name}", status=resp.status_code)
+            return False
+        return True
+    except Exception as e:
+        LOGGER.error("unstar_failed", repo=f"{owner}/{name}", error=str(e))
+        return False
 
 
 def extract_repos_metadata(repos: List[Dict[str, Any]]) -> List[RepoMetadata]:
