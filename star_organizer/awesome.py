@@ -52,7 +52,7 @@ def generate_awesome_list(
 
         lines.append(f"## {display}")
         if desc:
-            lines.append(f"\n*{desc}*")
+            lines.append(f"*{desc}*")
         lines.append("")
 
         if not repos:

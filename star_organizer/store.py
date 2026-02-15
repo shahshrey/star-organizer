@@ -133,8 +133,12 @@ def find_repo_in_organized(organized: OrganizedStarLists, query: str) -> list:
         for repo in cat_data.get("repos", []):
             if not isinstance(repo, dict):
                 continue
-            url = repo.get("url", "").lower()
-            desc = repo.get("description", "").lower()
+            raw_url = repo.get("url", "")
+            if not isinstance(raw_url, str):
+                raw_url = ""
+            url = canonicalize_repo_url(raw_url).lower()
+            raw_desc = repo.get("description", "")
+            desc = raw_desc.lower() if isinstance(raw_desc, str) else ""
             name = url.split("/")[-1] if "/" in url else ""
             if query_lower in url or query_lower in desc or query_lower in name:
                 results.append((cat_name, repo))
@@ -146,7 +150,14 @@ def extract_all_repo_urls(organized: OrganizedStarLists) -> Set[str]:
     for list_data in organized.values():
         for repo in list_data.get("repos", []):
             if isinstance(repo, dict):
-                urls.add(repo.get("url", ""))
+                raw_url = repo.get("url", "")
+                if not isinstance(raw_url, str):
+                    continue
+            elif isinstance(repo, str):
+                raw_url = repo
             else:
-                urls.add(repo)
+                continue
+            url = canonicalize_repo_url(raw_url)
+            if url:
+                urls.add(url)
     return urls

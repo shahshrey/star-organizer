@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 import requests
 import structlog
@@ -9,6 +9,9 @@ from star_organizer.models import GITHUB_API_TIMEOUT_SECONDS, GITHUB_TOKEN, PARA
 LOGGER = structlog.get_logger()
 
 DEAD_CHECK_WORKERS = min(PARALLEL_METADATA_WORKERS, 10)
+DEAD_STATUS_CODES = {403, 404, 410, 451}
+ALIVE_STATUS_CODES = {200}
+BASE_UNCERTAIN_STATUS_CODES = {429, -1, -2}
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -36,9 +39,11 @@ def _check_repo_alive(full_name: str) -> Tuple[str, int]:
                 LOGGER.warning("rate_limit_hit", repo=full_name, reset=reset_ts)
                 return full_name, 429
         return full_name, resp.status_code
-    except requests.Timeout:
+    except requests.Timeout as e:
+        LOGGER.warning("dead_check_timeout", repo=full_name, error=str(e))
         return full_name, -2
-    except Exception:
+    except Exception as e:
+        LOGGER.warning("dead_check_error", repo=full_name, error=str(e))
         return full_name, -1
 
 
@@ -59,7 +64,7 @@ def find_dead_repos(repos: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
         for future in as_completed(futures):
             full_name, status = future.result()
             status_map[full_name] = status
-            if status in (404, 403, 451, -1, -2):
+            if status in DEAD_STATUS_CODES:
                 repo = name_to_repo.get(full_name)
                 if repo:
                     dead.append(repo)
@@ -74,11 +79,27 @@ def find_dead_repos(repos: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], 
 
 def dead_status_label(code: int) -> str:
     labels = {
+        401: "Unauthorized",
         404: "Deleted / Not Found",
         403: "Private / Forbidden",
+        410: "Gone",
         429: "Rate Limited",
         451: "DMCA Takedown",
         -1: "Network Error",
         -2: "Timeout",
     }
     return labels.get(code, f"HTTP {code}")
+
+
+def is_uncertain_status(code: int) -> bool:
+    return (
+        code in BASE_UNCERTAIN_STATUS_CODES
+        or (code not in ALIVE_STATUS_CODES and code not in DEAD_STATUS_CODES)
+    )
+
+
+def uncertain_repo_names(status_map: Dict[str, int]) -> Set[str]:
+    return {
+        name for name, status in status_map.items()
+        if is_uncertain_status(status)
+    }

@@ -249,9 +249,14 @@ def print_repo_detail(repo: Dict[str, Any], index: int, total: int):
     )
 
 
-def print_dead_table(dead_repos: List[Dict[str, Any]], status_map: Dict[str, int]):
+def print_dead_table(dead_repos: List[Dict[str, Any]], status_map: Dict[str, int], uncertain_count: int = 0):
     if not dead_repos:
-        console.print("[green]No dead repos found — all stars are accessible![/green]")
+        if uncertain_count > 0:
+            console.print(
+                f"[yellow]No confirmed dead repos. {uncertain_count} checks were inconclusive (auth/rate-limit/network/server).[/yellow]"
+            )
+        else:
+            console.print("[green]No dead repos found — all checked stars are accessible![/green]")
         return
 
     from star_organizer.dead import dead_status_label
@@ -284,6 +289,10 @@ def print_dead_table(dead_repos: List[Dict[str, Any]], status_map: Dict[str, int
 
     console.print()
     console.print(table)
+    if uncertain_count > 0:
+        console.print(
+            f"[yellow]Skipped {uncertain_count} inconclusive repo checks (auth/rate-limit/network/server errors). Re-run for complete results.[/yellow]"
+        )
     console.print()
 
 
@@ -327,6 +336,7 @@ def print_cleanup_report(
     stale_names: set,
     dead_names: set,
     archived_names: set,
+    uncertain_names: set | None,
     threshold_days: int,
 ):
     if threshold_days >= 365:
@@ -338,8 +348,14 @@ def print_cleanup_report(
     else:
         thr = f"{threshold_days} day{'s' if threshold_days != 1 else ''}"
 
+    uncertain_names = uncertain_names or set()
     all_affected = stale_names | dead_names | archived_names
-    clean = total - len(all_affected)
+    uncertain_only = uncertain_names - all_affected
+    clean = total - len(all_affected) - len(uncertain_only)
+    uncertain_line = (
+        f"\n  [dim]Uncertain:[/dim]     [bold yellow]{len(uncertain_only)}[/bold yellow]"
+        if uncertain_only else ""
+    )
     console.print()
     console.print(
         Panel(
@@ -351,6 +367,7 @@ def print_cleanup_report(
                     f"  [dim]Stale ({thr}):[/dim] [bold yellow]{len(stale_names)}[/bold yellow]\n"
                     f"  [dim]Dead/404:[/dim]      [bold red]{len(dead_names)}[/bold red]\n"
                     f"  [dim]Archived:[/dim]      [bold magenta]{len(archived_names)}[/bold magenta]"
+                    f"{uncertain_line}"
                 )
             ),
             title="[bold cyan]Cleanup Report[/bold cyan]",

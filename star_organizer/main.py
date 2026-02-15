@@ -8,7 +8,7 @@ import typer
 
 from star_organizer.awesome import run_awesome_export
 from star_organizer.dashboard import print_dashboard
-from star_organizer.dead import find_dead_repos
+from star_organizer.dead import find_dead_repos, uncertain_repo_names
 from star_organizer.display import (
     console,
     print_archived_table,
@@ -23,7 +23,13 @@ from star_organizer.display import (
     print_summary,
 )
 from star_organizer.github_client import fetch_starred_repos, unstar_repo
-from star_organizer.models import GITHUB_TOKEN, OUTPUT_FILE, SYNC_STATE_FILE
+from star_organizer.models import (
+    DEFAULT_STALE_THRESHOLD_DAYS,
+    GITHUB_TOKEN,
+    OUTPUT_FILE,
+    STALE_PRESETS,
+    SYNC_STATE_FILE,
+)
 from star_organizer.pipeline import (
     create_backup,
     phase_1_fetch_and_load,
@@ -32,6 +38,7 @@ from star_organizer.pipeline import (
     phase_4_sync,
     validate_tokens,
 )
+from star_organizer.prompt_style import MENU_STYLE
 from star_organizer.stale import find_stale_repos, parse_threshold, run_stale_check
 from star_organizer.store import (
     find_repo_in_organized,
@@ -59,15 +66,6 @@ app = typer.Typer(
     add_completion=False,
 )
 
-MENU_STYLE = questionary.Style([
-    ("qmark", "fg:yellow bold"),
-    ("question", "bold"),
-    ("answer", "fg:green bold"),
-    ("pointer", "fg:yellow bold"),
-    ("highlighted", "fg:yellow bold"),
-    ("selected", "fg:green"),
-])
-
 ACTIONS = [
     questionary.Choice("Organize my stars (full pipeline)", value="full"),
     questionary.Choice("Organize only (skip GitHub sync)", value="organize"),
@@ -94,6 +92,30 @@ def _preview(output_file: str):
         print_error(f"No organized stars found at [bold]{output_file}[/bold]. Run the pipeline first.")
         return
     print_categories_table(organized)
+
+
+def _parse_threshold_or_exit(raw_value: str) -> int:
+    try:
+        return parse_threshold(raw_value)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1) from e
+
+
+def _bulk_unstar_and_sync_local(repos: list[dict], output_file: str) -> int:
+    organized = load_organized_stars(output_file)
+    count = 0
+    for repo in repos:
+        full_name = repo.get("full_name", "")
+        if not isinstance(full_name, str) or "/" not in full_name:
+            continue
+        owner, name = full_name.split("/", 1)
+        if unstar_repo(owner, name):
+            count += 1
+            remove_repo_from_organized(organized, repo.get("html_url", ""))
+    if count > 0:
+        save_organized_stars(output_file, organized)
+    return count
 
 
 def _run(
@@ -192,8 +214,12 @@ def _run_dead_check(test_limit: int = 0, interactive: bool = True, output_file: 
         return
     with console.status(f"[bold blue]Checking {len(repos)} repos for accessibility...[/bold blue]"):
         dead, status_map = find_dead_repos(repos)
-    console.print(f"\n  [bold]Checked {len(repos)} repos[/bold] — [red]{len(dead)} dead[/red]")
-    print_dead_table(dead, status_map)
+    uncertain = uncertain_repo_names(status_map)
+    console.print(
+        f"\n  [bold]Checked {len(repos)} repos[/bold] — "
+        f"[red]{len(dead)} dead[/red], [yellow]{len(uncertain)} uncertain[/yellow]"
+    )
+    print_dead_table(dead, status_map, uncertain_count=len(uncertain))
     if dead and interactive:
         action = questionary.select(
             "What would you like to do?",
@@ -208,17 +234,7 @@ def _run_dead_check(test_limit: int = 0, interactive: bool = True, output_file: 
                 f"Unstar {len(dead)} dead repos?", default=False, style=MENU_STYLE
             ).ask()
             if confirm:
-                organized = load_organized_stars(output_file)
-                count = 0
-                for repo in dead:
-                    fn = repo.get("full_name", "")
-                    if "/" in fn:
-                        owner, name = fn.split("/", 1)
-                        if unstar_repo(owner, name):
-                            count += 1
-                            remove_repo_from_organized(organized, repo.get("html_url", ""))
-                if count > 0:
-                    save_organized_stars(output_file, organized)
+                count = _bulk_unstar_and_sync_local(dead, output_file)
                 print_success(f"Unstarred {count}/{len(dead)} dead repos")
 
 
@@ -245,32 +261,28 @@ def _run_archived_check(test_limit: int = 0, interactive: bool = True, output_fi
                 f"Unstar {len(archived)} archived repos?", default=False, style=MENU_STYLE
             ).ask()
             if confirm:
-                organized = load_organized_stars(output_file)
-                count = 0
-                for repo in archived:
-                    fn = repo.get("full_name", "")
-                    if "/" in fn:
-                        owner, name = fn.split("/", 1)
-                        if unstar_repo(owner, name):
-                            count += 1
-                            remove_repo_from_organized(organized, repo.get("html_url", ""))
-                if count > 0:
-                    save_organized_stars(output_file, organized)
+                count = _bulk_unstar_and_sync_local(archived, output_file)
                 print_success(f"Unstarred {count}/{len(archived)} archived repos")
 
 
-def _run_cleanup(test_limit: int = 0, threshold_days: int = 0):
+def _run_cleanup(test_limit: int = 0, threshold_days: int = 0, interactive: bool = True):
     if threshold_days <= 0:
-        selected_threshold = questionary.select(
-            "Staleness threshold:",
-            choices=[questionary.Choice(k, value=k) for k in ["3 months", "6 months", "1 year", "2 years"]],
-            default="1 year",
-            style=MENU_STYLE,
-        ).ask()
-        if selected_threshold is None:
-            console.print("[dim]Cancelled.[/dim]")
-            return
-        threshold_days = parse_threshold(selected_threshold)
+        if not interactive:
+            threshold_days = DEFAULT_STALE_THRESHOLD_DAYS
+        else:
+            selected_threshold = questionary.select(
+                "Staleness threshold:",
+                choices=[
+                    questionary.Choice(label, value=days)
+                    for label, days in STALE_PRESETS.items()
+                ],
+                default="1 year",
+                style=MENU_STYLE,
+            ).ask()
+            if selected_threshold is None:
+                console.print("[dim]Cancelled.[/dim]")
+                return
+            threshold_days = selected_threshold
 
     with console.status("[bold blue]Fetching starred repos...[/bold blue]"):
         repos = fetch_starred_repos(test_limit)
@@ -282,22 +294,30 @@ def _run_cleanup(test_limit: int = 0, threshold_days: int = 0):
 
     with console.status(f"[bold blue]Checking {len(repos)} repos for accessibility...[/bold blue]"):
         dead, status_map = find_dead_repos(repos)
+    uncertain_names = uncertain_repo_names(status_map)
 
     archived = [r for r in repos if r.get("archived")]
 
     stale_names = {r.get("full_name", "") for r in stale}
     dead_names = {r.get("full_name", "") for r in dead}
     archived_names = {r.get("full_name", "") for r in archived}
-    print_cleanup_report(len(repos), stale_names, dead_names, archived_names, threshold_days)
+    print_cleanup_report(
+        len(repos),
+        stale_names,
+        dead_names,
+        archived_names,
+        uncertain_names,
+        threshold_days,
+    )
 
     if stale:
         print_stale_table(stale)
-    if dead:
-        print_dead_table(dead, status_map)
+    if dead or uncertain_names:
+        print_dead_table(dead, status_map, uncertain_count=len(uncertain_names))
     if archived:
         print_archived_table(archived)
 
-    if not stale and not dead and not archived:
+    if not stale and not dead and not archived and not uncertain_names:
         console.print("\n  [green bold]Your stars are squeaky clean![/green bold]\n")
 
 
@@ -330,7 +350,11 @@ def _run_recategorize(output_file: str):
 
     choices = [
         questionary.Choice(
-            f"{repo.get('url', '').split('github.com/')[-1]}  [{cat}]",
+            (
+                f"{repo.get('url', '').split('github.com/')[-1]}  [{cat}]"
+                if isinstance(repo.get("url", ""), str) and repo.get("url", "")
+                else f"[unknown url]  [{cat}]"
+            ),
             value=(cat, repo),
         )
         for cat, repo in results
@@ -556,7 +580,7 @@ def cli(
         if not GITHUB_TOKEN:
             print_error("GITHUB_TOKEN is not set")
             raise typer.Exit(1)
-        threshold_days = parse_threshold(stale_threshold)
+        threshold_days = _parse_threshold_or_exit(stale_threshold)
         run_stale_check(
             test_limit=test_limit,
             threshold_days=threshold_days,
@@ -583,8 +607,8 @@ def cli(
         if not GITHUB_TOKEN:
             print_error("GITHUB_TOKEN is not set")
             raise typer.Exit(1)
-        threshold_days = parse_threshold(stale_threshold)
-        _run_cleanup(test_limit, threshold_days)
+        threshold_days = _parse_threshold_or_exit(stale_threshold)
+        _run_cleanup(test_limit, threshold_days, interactive=interactive is not False)
         return
 
     if dashboard:

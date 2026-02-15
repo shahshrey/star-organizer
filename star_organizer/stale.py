@@ -22,34 +22,32 @@ from star_organizer.models import (
     STALE_EXPORT_FILE,
     STALE_PRESETS,
 )
+from star_organizer.prompt_style import MENU_STYLE
 from star_organizer.store import load_organized_stars, remove_repo_from_organized, save_organized_stars
 
 LOGGER = structlog.get_logger()
 
-MENU_STYLE = questionary.Style([
-    ("qmark", "fg:yellow bold"),
-    ("question", "bold"),
-    ("answer", "fg:green bold"),
-    ("pointer", "fg:yellow bold"),
-    ("highlighted", "fg:yellow bold"),
-    ("selected", "fg:green"),
-])
-
 
 def parse_threshold(value: str) -> int:
     v = value.strip().lower()
+    if not v:
+        raise ValueError("Invalid threshold: ''. Use a number, or append d/m/y (e.g. 90, 6m, 2y)")
     for label, days in STALE_PRESETS.items():
         if v == label:
             return days
 
     try:
         if v.endswith("d"):
-            return int(v[:-1])
-        if v.endswith("m"):
-            return int(v[:-1]) * 30
-        if v.endswith("y"):
-            return int(v[:-1]) * 365
-        return int(v)
+            days = int(v[:-1])
+        elif v.endswith("m"):
+            days = int(v[:-1]) * 30
+        elif v.endswith("y"):
+            days = int(v[:-1]) * 365
+        else:
+            days = int(v)
+        if days <= 0:
+            raise ValueError
+        return days
     except (ValueError, IndexError):
         raise ValueError(f"Invalid threshold: '{value}'. Use a number, or append d/m/y (e.g. 90, 6m, 2y)")
 

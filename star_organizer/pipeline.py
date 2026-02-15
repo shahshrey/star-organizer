@@ -98,7 +98,7 @@ def phase_2_metadata(
 
     new_metadata = [
         m for m in all_metadata
-        if m["url"] not in already_categorized
+        if canonicalize_repo_url(m.get("url", "")) not in already_categorized
     ]
 
     LOGGER.info(
@@ -128,7 +128,11 @@ def phase_3_categorize(
 
         old_repo_urls: set = set()
         if not reset:
-            old_repo_urls = extract_all_repo_urls(organized)
+            old_repo_urls = {
+                canonical_url
+                for url in extract_all_repo_urls(organized)
+                if (canonical_url := canonicalize_repo_url(url))
+            }
 
         organized = {
             name: {"description": desc, "repos": []}
@@ -138,8 +142,15 @@ def phase_3_categorize(
         LOGGER.info("categories_saved", count=len(organized))
 
         if old_repo_urls:
-            metadata_by_url = {m["url"]: m for m in all_metadata}
-            new_urls = {m["url"] for m in new_metadata}
+            metadata_by_url: Dict[str, RepoMetadata] = {}
+            for m in all_metadata:
+                url = canonicalize_repo_url(m.get("url", ""))
+                if url:
+                    metadata_by_url[url] = m
+            new_urls = {
+                url for m in new_metadata
+                if (url := canonicalize_repo_url(m.get("url", "")))
+            }
             old_metadata = [metadata_by_url[url] for url in old_repo_urls if url in metadata_by_url and url not in new_urls]
             repos_to_categorize = old_metadata + repos_to_categorize
             LOGGER.info("repos_queued_for_recategorization", old=len(old_metadata), new=len(new_metadata))
