@@ -35,6 +35,16 @@ PARALLEL_METADATA_WORKERS = 15
 PARALLEL_CATEGORIZATION_WORKERS = 100
 BATCH_SAVE_INTERVAL = 20
 
+DEFAULT_STALE_THRESHOLD_DAYS = 365
+STALE_PRESETS = {
+    "3 months": 90,
+    "6 months": 180,
+    "1 year": 365,
+    "2 years": 730,
+    "5 years": 1825,
+}
+STALE_EXPORT_FILE = "stale_stars.json"
+
 
 class CategoryNameAndDescription(BaseModel):
     name: str = Field(description="The name of the category")
